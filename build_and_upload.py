@@ -61,8 +61,8 @@ def check_required_files():
         'README.md',
         'LICENSE',
         'requirements.txt',
-        '__init__.py',
-        'page_path_rag.py'
+        'PagePathRAG/__init__.py',
+        'PagePathRAG/page_path_rag.py'
     ]
     
     missing_files = []

@@ -28,7 +28,7 @@ pip install PagePathRAG
 或者从源码安装：
 
 ```bash
-git clone https://github.com/your-username/PagePathRAG.git
+git clone https://github.com/cnatom/PagePathRAG.git
 cd PagePathRAG
 pip install -e .
 ```
@@ -53,17 +53,20 @@ rag = PagePathRAG(
 )
 
 # 插入UI交互路径数据
-ui_paths = [
-    "点击页面底部频道按钮，进入频道tab页。在频道tab页中找到并点击一个新频道，进入该频道主页。",
-    "点击设置页面，进入通知设置tab，激活推送通知按钮。",
-    "在主页面滑动到顶部，点击搜索框，输入关键词进行搜索。"
+texts = [
+    "从A页面点击B按钮进入B页面",
+    "在B页面选择C选项后跳转到C页面",
+    "从C页面点击返回按钮回到B页面",
+    "在B页面点击设置按钮进入设置页面",
+    "在设置页面调整通知开关",
+    "从设置页面点击保存按钮返回B页面"
 ]
 
-rag.insert(ui_paths)
+rag.insert(texts)
 
-# 基于关键词查询
-keywords = ["频道", "设置", "通知"]
-result = rag.query_with_keywords(keywords, top_k=20)
+# 基于关键词查询UI路径
+keywords = ["A页面","C页面"]
+result = rag.query_with_paths(keywords, top_k=20)
 print(result)
 ```
 
@@ -90,16 +93,19 @@ rag = PagePathRAG(
     prompt=custom_prompt
 )
 
-# 批量插入预分片的文本块
-chunks = [
-    "点击页面底部频道按钮",
-    "进入频道tab页", 
-    "点击新频道进入主页"
+# 插入文本
+texts = [
+    "从A页面点击B按钮进入B页面",
+    "在B页面选择C选项后跳转到C页面",
+    "从C页面点击返回按钮回到B页面",
+    "在B页面点击设置按钮进入设置页面",
+    "在设置页面调整通知开关",
+    "从设置页面点击保存按钮返回B页面"
 ]
-rag.batch_insert(chunks, "ui_flows")
+rag.insert(texts)
 
 # 只获取上下文，不生成回答
-context = rag.query_with_keywords(["频道"], return_context_only=True)
+context = rag.query_with_paths(["A页面","B页面"], return_context_only=True)
 print(context)
 ```
 
@@ -120,23 +126,26 @@ print(context)
 
 #### 主要方法
 
+PagePathRAG对外提供两个核心接口：
+
 ##### `insert(texts: List[str])`
-插入UI路径文本列表到知识图谱中。
+插入文本到知识图谱中。
 
-##### `query_with_keywords(keywords: List[str], top_k: int = 40, response_type: str = "Multiple Paragraphs", return_context_only: bool = False)`
-基于关键词列表进行查询。
+**参数：**
+- `texts`: 文本列表，每个文本通常包含UI交互路径描述
 
-##### `batch_insert(chunk_list: List[str], source_name_prefix: str = "batch")`
-批量插入预分片的文本块。
+##### `query_with_paths(keywords: List[str], top_k: int = 40, response_type: str = "Multiple Paragraphs", return_context_only: bool = False)`
+基于关键词列表查询相关的UI路径。
 
-##### `delete_by_entity(entity_name: str)`
-根据实体名称删除相关的实体和关系。
+**参数：**
+- `keywords`: 关键词列表，用于检索相关的UI交互路径
+- `top_k`: 返回top-k个最相关的结果，默认40
+- `response_type`: 响应类型，默认"Multiple Paragraphs"
+- `return_context_only`: 是否只返回上下文，不生成回答，默认False
 
-##### `clear_storage()`
-清理所有存储数据。
-
-##### `get_storage_info()`
-获取存储状态信息。
+**返回值：**
+- 如果`return_context_only=True`，返回上下文字符串
+- 否则返回包含完整查询结果的字典，包含context、documents、path_entities等字段
 
 ### PagePathRAGPrompt 类
 
@@ -227,9 +236,9 @@ PagePathRAG/
 
 如果你遇到任何问题或有功能建议，请：
 
-1. 查看 [文档](https://github.com/your-username/PagePathRAG#readme)
-2. 搜索 [现有issues](https://github.com/your-username/PagePathRAG/issues)
-3. 创建新的 [issue](https://github.com/your-username/PagePathRAG/issues/new)
+1. 查看 [文档](https://github.com/cnatom/PagePathRAG#readme)
+2. 搜索 [现有issues](https://github.com/cnatom/PagePathRAG/issues)
+3. 创建新的 [issue](https://github.com/cnatom/PagePathRAG/issues/new)
 
 ## 🔄 更新日志
 
