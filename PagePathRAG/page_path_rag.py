@@ -7,11 +7,11 @@ import os
 from typing import List, Dict, Any, Optional, Union
 from dataclasses import asdict, dataclass
 
-from PathRAG.PathRAG import PathRAG as InternalPathRAG
-from PathRAG.base import QueryParam
-from PathRAG.llm import gpt_complete, openai_embedding
-from PathRAG.prompt import PROMPTS
-from PathRAG.utils import wrap_embedding_func_with_attrs
+from .PathRAG.PathRAG import PathRAG as InternalPathRAG
+from .PathRAG.base import QueryParam
+from .PathRAG.llm import gpt_complete, openai_embedding
+from .PathRAG.prompt import PROMPTS
+from .PathRAG.utils import wrap_embedding_func_with_attrs
 
 @dataclass
 class PagePathRAGPrompt:
@@ -355,4 +355,4 @@ def create_page_path_rag(
 
 
 # 导出主要类和函数
-__all__ = ["PagePathRAG", "PagePathRAGPrompt", "create_page_path_rag"] 
+__all__ = ["PagePathRAG", "PagePathRAGPrompt"] 
