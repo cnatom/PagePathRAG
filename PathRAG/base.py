@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import TypedDict, Union, Literal, Generic, TypeVar
+from typing import TypedDict, Union, Literal, Generic, TypeVar, Optional
 
 import numpy as np
 
@@ -15,9 +15,10 @@ T = TypeVar("T")
 
 @dataclass
 class QueryParam:
-    mode: Literal["hybrid"] = "global"
+    mode: Literal["hybrid"] = "hybrid"
     only_need_context: bool = False
     only_need_prompt: bool = False
+    return_context_and_answer: bool = False  # 新参数：同时返回上下文和答案
     response_type: str = "Multiple Paragraphs"
     stream: bool = False
     top_k: int =40
@@ -81,7 +82,7 @@ class BaseKVStorage(Generic[T], StorageNameSpace):
 
 @dataclass
 class BaseGraphStorage(StorageNameSpace):
-    embedding_func: EmbeddingFunc = None
+    embedding_func: Optional[EmbeddingFunc] = None
 
     async def has_node(self, node_id: str) -> bool:
         raise NotImplementedError

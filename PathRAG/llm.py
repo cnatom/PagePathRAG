@@ -500,15 +500,15 @@ async def gpt_4o_complete(
     )
 
 
-async def gpt_4o_mini_complete(
-    prompt, system_prompt=None, history_messages=[], keyword_extraction=False, **kwargs
+async def gpt_complete(
+    prompt, model_name="gpt-4o-mini", system_prompt=None, history_messages=[], keyword_extraction=False, **kwargs
 ) -> str:
     keyword_extraction = kwargs.pop("keyword_extraction", None)
     if keyword_extraction:
         kwargs["response_format"] = GPTKeywordExtractionFormat
     return await openai_complete_if_cache(
-        "gpt-4o-mini",
-        prompt,
+        model=model_name,
+        prompt=prompt,
         system_prompt=system_prompt,
         history_messages=history_messages,
         **kwargs,
@@ -1098,7 +1098,7 @@ if __name__ == "__main__":
     import asyncio
 
     async def main():
-        result = await gpt_4o_mini_complete("How are you?")
+        result = await gpt_complete("How are you?")
         print(result)
 
     asyncio.run(main())

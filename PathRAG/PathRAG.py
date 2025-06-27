@@ -8,7 +8,7 @@ from typing import Type, cast
 
 
 from .llm import (
-    gpt_4o_mini_complete,
+    gpt_complete,
     openai_embedding,
 )
 from .operate import (
@@ -104,9 +104,8 @@ def always_get_an_event_loop() -> asyncio.AbstractEventLoop:
 
 @dataclass
 class PathRAG:
-    working_dir: str = field(
-        default_factory=lambda: f"./PathRAG_cache_{datetime.now().strftime('%Y-%m-%d-%H:%M:%S')}"
-    )
+    working_dir: str = field(default="data/result")
+    working_name: str = field(default="")
 
     embedding_cache_config: dict = field(
         default_factory=lambda: {
@@ -148,9 +147,13 @@ class PathRAG:
     embedding_func: EmbeddingFunc = field(default_factory=lambda: openai_embedding)
     embedding_batch_num: int = 32
     embedding_func_max_async: int = 16
+    
+    # 批量插入配置
+    batch_insert_max_async: int = 8  # 控制批量插入的并发数
+    batch_insert_chunk_size: int = 50  # 每个批次处理的chunk数量
 
 
-    llm_model_func: callable = gpt_4o_mini_complete  
+    llm_model_func: callable = gpt_complete  
     llm_model_name: str = "meta-llama/Llama-3.2-1B-Instruct"  
     llm_model_max_token_size: int = 32768
     llm_model_max_async: int = 16
@@ -166,6 +169,10 @@ class PathRAG:
     convert_response_to_json_func: callable = convert_response_to_json
 
     def __post_init__(self):
+        # 处理工作目录路径拼接
+        if self.working_name:
+            self.working_dir = os.path.join(self.working_dir, self.working_name)
+        
         log_file = os.path.join("PathRAG.log")
         set_logger(log_file)
         logger.setLevel(self.log_level)
@@ -330,6 +337,8 @@ class PathRAG:
                 entity_vdb=self.entities_vdb,
                 relationships_vdb=self.relationships_vdb,
                 global_config=asdict(self),
+                show_progress=True,
+                use_chinese_progress=False,
             )
             if maybe_new_kg is None:
                 logger.warning("No new entities and relationships found")
@@ -341,6 +350,137 @@ class PathRAG:
         finally:
             if update_storage:
                 await self._insert_done()
+
+    def insert_batch(self, chunk_list, source_name_prefix="batch"):
+        """
+        批量插入预分片的文本块，支持多线程处理
+        
+        Args:
+            chunk_list (List[str]): 预分片的文本块列表，每个str就是一个chunk
+            source_name_prefix (str): 源文档名称前缀，用于生成doc_id
+        
+        Returns:
+            None
+        """
+        loop = always_get_an_event_loop()
+        return loop.run_until_complete(self.ainsert_batch(chunk_list, source_name_prefix))
+
+    async def ainsert_batch(self, chunk_list, source_name_prefix="batch"):
+        """
+        异步批量插入预分片的文本块
+        
+        Args:
+            chunk_list (List[str]): 预分片的文本块列表
+            source_name_prefix (str): 源文档名称前缀
+        """
+        if not chunk_list:
+            logger.warning("Empty chunk list provided")
+            return
+            
+        update_storage = False
+        try:
+            logger.info(f"[Batch Insert] Starting batch insertion of {len(chunk_list)} chunks")
+            
+            # 创建虚拟文档ID
+            doc_id = compute_mdhash_id(f"{source_name_prefix}_{len(chunk_list)}", prefix="doc-")
+            new_docs = {doc_id: {"content": f"Batch document with {len(chunk_list)} chunks"}}
+            
+            # 处理chunks，跳过分词步骤
+            inserting_chunks = {}
+            logger.info("[Batch Insert] Preparing chunks...")
+            
+            for i, chunk_content in enumerate(chunk_list):
+                if not chunk_content or not chunk_content.strip():
+                    logger.warning(f"Skipping empty chunk at index {i}")
+                    continue
+                    
+                chunk_content = chunk_content.strip()
+                chunk_id = compute_mdhash_id(chunk_content, prefix="chunk-")
+                
+                inserting_chunks[chunk_id] = {
+                    "content": chunk_content,
+                    "full_doc_id": doc_id,
+                    "chunk_order_index": i,
+                    "tokens": len(chunk_content)  # 简单估算，可以改为更精确的token计算
+                }
+            
+            if not inserting_chunks:
+                logger.warning("No valid chunks found after filtering")
+                return
+                
+            # 检查是否有新的chunks需要插入
+            _add_chunk_keys = await self.text_chunks.filter_keys(list(inserting_chunks.keys()))
+            inserting_chunks = {
+                k: v for k, v in inserting_chunks.items() if k in _add_chunk_keys
+            }
+            
+            if not len(inserting_chunks):
+                logger.warning("All chunks are already in the storage")
+                return
+                
+            update_storage = True
+            logger.info(f"[Batch Insert] Inserting {len(inserting_chunks)} new chunks")
+            
+            # 分批处理chunks以支持大规模数据
+            await self._process_chunks_in_batches(inserting_chunks)
+            
+            # 批量处理实体抽取
+            logger.info("[Batch Insert] Starting entity extraction...")
+            maybe_new_kg = await self._extract_entities_in_batches(inserting_chunks)
+            
+            if maybe_new_kg is not None:
+                self.chunk_entity_relation_graph = maybe_new_kg
+            else:
+                logger.warning("No new entities and relationships found")
+            
+            # 保存文档和chunks
+            await self.full_docs.upsert(new_docs)
+            await self.text_chunks.upsert(inserting_chunks)
+            
+            logger.info(f"[Batch Insert] Successfully completed batch insertion")
+            
+        except Exception as e:
+            logger.error(f"[Batch Insert] Error during batch insertion: {e}")
+            raise
+        finally:
+            if update_storage:
+                await self._insert_done()
+
+    async def _process_chunks_in_batches(self, inserting_chunks):
+        """分批处理chunks的向量化"""
+        chunk_items = list(inserting_chunks.items())
+        semaphore = asyncio.Semaphore(self.batch_insert_max_async)
+        
+        async def process_batch(batch_chunks):
+            async with semaphore:
+                batch_dict = dict(batch_chunks)
+                await self.chunks_vdb.upsert(batch_dict)
+                logger.info(f"Processed batch of {len(batch_dict)} chunks")
+        
+        # 将chunks分成小批次
+        tasks = []
+        for i in range(0, len(chunk_items), self.batch_insert_chunk_size):
+            batch = chunk_items[i:i + self.batch_insert_chunk_size]
+            tasks.append(process_batch(batch))
+        
+        # 并发处理所有批次
+        await asyncio.gather(*tasks)
+
+    async def _extract_entities_in_batches(self, inserting_chunks):
+        """并发处理实体抽取（带简单进度显示）"""
+        from .operate import extract_entities
+        
+        logger.info(f"[批量实体抽取] 并发处理 {len(inserting_chunks)} 个文本块（带进度显示）")
+        
+        return await extract_entities(
+            inserting_chunks,
+            knowledge_graph_inst=self.chunk_entity_relation_graph,
+            entity_vdb=self.entities_vdb,
+            relationships_vdb=self.relationships_vdb,
+            global_config=asdict(self),
+            show_progress=True,
+            use_chinese_progress=True,
+        )
 
     async def _insert_done(self):
         tasks = []
@@ -494,11 +634,11 @@ class PathRAG:
             if update_storage:
                 await self._insert_done()
     
-    def query(self, query: str, param: QueryParam = QueryParam()):
+    def query(self, query: str, param: QueryParam = QueryParam(), use_cache: bool = True):
         loop = always_get_an_event_loop()
-        return loop.run_until_complete(self.aquery(query, param))
+        return loop.run_until_complete(self.aquery(query, param, use_cache))
     
-    async def aquery(self, query: str, param: QueryParam = QueryParam()):
+    async def aquery(self, query: str, param: QueryParam = QueryParam(), use_cache: bool = True):
         if param.mode in ["hybrid"]:
             response= await kg_query(
                 query,
@@ -514,6 +654,7 @@ class PathRAG:
                 else self.key_string_value_json_storage_cls(
                     global_config=asdict(self),
                 ),
+                use_cache=use_cache,
             )
             print("response all ready")
         else:
@@ -521,6 +662,50 @@ class PathRAG:
         await self._query_done()
         return response
 
+    def query_with_keywords(self, keywords: list[str], param: QueryParam = QueryParam()):
+        """
+        基于关键词列表进行查询
+        
+        Args:
+            keywords: 关键词列表
+            param: 查询参数（包含use_path_retrieval等所有查询选项）
+            
+        Returns:
+            str: 格式化的上下文文本（标准模式）
+            dict: 包含上下文和文档列表的字典（结构化模式或路径检索模式）
+        """
+        loop = always_get_an_event_loop()
+        return loop.run_until_complete(self.aquery_with_keywords(keywords, param))
+    
+    async def aquery_with_keywords(self, keywords: list[str], param: QueryParam = QueryParam()):
+        """
+        基于关键词列表进行异步查询
+        
+        Args:
+            keywords: 关键词列表
+            param: 查询参数（包含use_path_retrieval等所有查询选项）
+            
+        Returns:
+            查询结果（格式取决于参数设置）
+        """
+        from .operate import kg_query_by_keywords
+        
+        if param.mode in ["hybrid"]:
+            response = await kg_query_by_keywords(
+                keywords=keywords,
+                knowledge_graph_inst=self.chunk_entity_relation_graph,
+                entities_vdb=self.entities_vdb,
+                relationships_vdb=self.relationships_vdb,
+                text_chunks_db=self.text_chunks,
+                query_param=param,
+                global_config=asdict(self),
+            )
+            print("keyword query response ready")
+        else:
+            raise ValueError(f"Unknown mode {param.mode}")
+        
+        await self._query_done()
+        return response
         
     async def _query_done(self):
         tasks = []
